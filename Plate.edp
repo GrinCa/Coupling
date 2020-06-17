@@ -1,0 +1,173 @@
+//--------------------------------------------------------------------------
+// Load libraries and mesh
+//--------------------------------------------------------------------------
+
+
+//verbosity = 10;
+
+//loads
+load "msh3" // for buildlayers function
+load "gmsh" // for loading gmsh meshes
+
+//includes
+include "/home/julien/Documents/FreeFem_routines/exports.idp"
+
+
+string root="Matrices/Plate/"; // Matrices/Plate/
+
+
+//load the mesh from the Gmsh file
+mesh3 Th = gmshload3("Plate.msh");
+
+//region label
+int acoustic = 1;
+int elastic = 2;
+
+//boundary label
+int[int] boundaryLabel(3);
+int embedding = 3;
+int coupling = 4;
+int extpressure = 5;
+
+boundaryLabel[0] = embedding;
+boundaryLabel[1] = coupling;
+boundaryLabel[2] = extpressure;
+
+
+//--------------------------------------------------------------------------
+// Define variables, functions, and macros
+//--------------------------------------------------------------------------
+
+real E = 2e9;
+real nu = 0.3;
+real mu = E/(2*(1+nu));
+real lambda = E*nu/((1+nu)*(1-2*nu));
+
+
+real pressure = 1;
+
+real sqrt2=sqrt(2.0);
+
+macro Grad(p) [dx(p),dy(p),dz(p)] // EOM -- End Of Macro
+
+macro epsilon(u1,u2,u3)  [dx(u1),
+						  dy(u2),
+						  dz(u3),
+						  (dz(u2)+dy(u3))/sqrt2,
+						  (dz(u1)+dx(u3))/sqrt2,
+						  (dy(u1)+dx(u2))/sqrt2] // EOM -- End Of Macro
+
+macro div(u1,u2,u3) ( dx(u1)+dy(u2)+dz(u3) ) // EOM -- End Of Macro
+
+
+
+//--------------------------------------------------------------------------
+// Define finite element space, solid and fluid
+//--------------------------------------------------------------------------
+
+fespace VhS(Th,[P2,P2,P2]);
+VhS [u1,u2,u3], [v1,v2,v3];
+
+fespace VhF(Th,P2);
+VhF p,v;
+
+/*
+//--------------------------------------------------------------------------
+// PML functions
+//--------------------------------------------------------------------------
+real L1x = 1e5;//real L1x = 5.5;
+real L2x = 6.05;
+real L1y = 1e5;//real L1y = 3.0;
+real L2y = 3.55;
+real L1z = 1e5;//real L1z = 3.0;
+real L2z = 3.55;
+
+real km=2.6562;
+
+func PML3x=1/(L2x-abs(x)) ;
+func decay3x=(abs(x)>L1x) ? 1+1i*PML3x/km : 1 ;
+func PML3y=1/(L2y-abs(y)) ;
+func decay3y=(abs(y)>L1y) ? 1+1i*PML3y/km : 1 ;
+func PML3z=1/(L2z-abs(z)) ;
+func decay3z=(abs(z)>L1z) ? 1+1i*PML3z/km : 1 ;
+
+*/
+
+
+//--------------------------------------------------------------------------
+// Define varf
+//--------------------------------------------------------------------------
+
+//Solid
+varf k([u1,u2,u3], [v1,v2,v3]) = int3d(Th, elastic)( lambda*div(u1,u2,u3)*div(v1,v2,v3) +
+	  	            		  	                     2.0*mu*( epsilon(u1,u2,u3)'*epsilon(v1,v2,v3) ) ) +
+				                 on(embedding, u1=0, u2=0, u3=0);
+
+varf m([u1,u2,u3], [v1,v2,v3]) = int3d(Th, elastic)( [u1,u2,u3]'*[v1,v2,v3] );
+
+
+//Fluid
+varf q(p, v) = int3d(Th, acoustic)( p*v );
+
+varf h(p, v) = int3d(Th, acoustic)( Grad(p)'*Grad(v) );
+
+
+//Coupling
+varf c(p,v) = int2d(Th, coupling)( p*v );
+
+//RHS
+varf rhs(unused,v) = int2d(Th, extpressure)( pressure*v );
+
+
+
+//--------------------------------------------------------------------------
+// Define matrices
+//--------------------------------------------------------------------------
+
+//Solid
+matrix K = k(VhS, VhS);
+matrix M = m(VhS, VhS);
+//Fluid
+matrix H = h(VhF, VhF);
+matrix Q = q(VhF, VhF);
+//Coupling
+matrix C = c(VhF, VhF);
+
+//RHS
+real[int] RHStmp = rhs(0,VhF);
+matrix RHS = RHStmp;
+
+
+
+{
+ofstream fout(root+"M.txt");
+fout<< M <<endl;
+}
+{
+ofstream fout(root+"K.txt");
+fout<< K <<endl;
+}
+{
+ofstream fout(root+"H.txt");
+fout<< H <<endl;
+}
+{
+ofstream fout(root+"Q.txt");
+fout<< Q <<endl;
+}
+{
+ofstream fout(root+"C.txt");
+fout<< C <<endl;
+}
+{
+ofstream fout(root+"RHS.txt");
+fout<< RHS <<endl;
+}
+
+saveRegionLabels(VhF, root+"regions.txt");
+saveBoundariesLabels(VhF, boundaryLabel, root+"labels.txt");
+saveNodes(VhF,root+"Nodes.txt");
+saveConnectivity(Th, VhF, root+"connectivity_table.txt");
+
+
+

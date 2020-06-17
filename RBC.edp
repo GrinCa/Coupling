@@ -1,0 +1,156 @@
+//--------------------------------------------------------------------------
+// Load libraries and mesh
+//--------------------------------------------------------------------------
+
+include "ffmatlib.idp"
+
+//verbosity = 10;
+
+load "msh3" // for buildlayers function
+load "gmsh" // for loading gmsh meshes
+
+string root="Matrices/RBC/"; // Matrices/Plate/
+mesh3 Th = gmshload3("RBC.msh");
+
+
+int acoustic = 1;
+int elastic = 2;
+int coupling = 3;
+int extpressure = 4;
+int embedding = 5;
+int RBClab = 6;
+
+
+
+//--------------------------------------------------------------------------
+// Define variables, functions, and macros
+//--------------------------------------------------------------------------
+
+real E = 2e9;
+real nu = 0.3;
+real mu = E/(2*(1+nu));
+real lambda = E*nu/((1+nu)*(1-2*nu));
+
+
+real pressure = 1;
+
+real sqrt2=sqrt(2.0);
+
+macro Grad(p) [dx(p),dy(p),dz(p)] // EOM -- End Of Macro
+
+macro epsilon(u1,u2,u3)  [dx(u1),
+			  dy(u2),
+			  dz(u3),
+			  (dz(u2)+dy(u3))/sqrt2,
+			  (dz(u1)+dx(u3))/sqrt2,
+			  (dy(u1)+dx(u2))/sqrt2] // EOM -- End Of Macro
+
+macro div(u1,u2,u3) ( dx(u1)+dy(u2)+dz(u3) ) // EOM -- End Of Macro
+
+
+
+//--------------------------------------------------------------------------
+// Define finite element space, solid and fluid
+//--------------------------------------------------------------------------
+
+fespace VhS(Th,[P2,P2,P2]);
+VhS [u1,u2,u3], [v1,v2,v3];
+
+fespace VhF(Th,P2);
+VhF p,v;
+
+
+//--------------------------------------------------------------------------
+// Define varf
+//--------------------------------------------------------------------------
+
+real f = 500;
+real c0 = 340;
+real k0 = c0/f;
+
+//Solid
+varf k([u1,u2,u3], [v1,v2,v3]) = int3d(Th, elastic)( lambda*div(u1,u2,u3)*div(v1,v2,v3) +
+	  	            		  	                      2.0*mu*( epsilon(u1,u2,u3)'*epsilon(v1,v2,v3) ) ) +
+				                 on(embedding, u1=0, u2=0, u3=0);
+varf m([u1,u2,u3], [v1,v2,v3]) = int3d(Th, elastic)( [u1,u2,u3]'*[v1,v2,v3] );
+
+
+//Fluid
+
+varf h(p, v) = int3d(Th, acoustic)( Grad(p)'*Grad(v) );
+			   
+
+varf rbc(p, v) = int2d(Th, RBClab)( -k0*p*v - (Grad(p)'*Grad(v)-
+										   	   Grad(p)'*[N.x*dx(v),N.y*dy(v),N.z*dz(v)] - 
+										   	   Grad(v)'*[N.x*dx(p),N.y*dy(p),N.z*dz(p)] + 
+										       [N.x*dx(p),N.y*dy(p),N.z*dz(p)]'*[N.x*dx(v),N.y*dy(v),N.z*dz(v)] )/2/k0 );
+
+varf q(p, v) = int3d(Th, acoustic)( p*v );
+
+//Coupling
+varf c(p,v) = int2d(Th, coupling)( p*v );
+
+//RHS
+varf rhs(unused,v) = int2d(Th, extpressure)( pressure*v );
+
+
+
+
+//--------------------------------------------------------------------------
+// Define matrices
+//--------------------------------------------------------------------------
+
+//Solid
+matrix K = k(VhS, VhS);
+matrix M = m(VhS, VhS);
+//Fluid
+matrix H = h(VhF, VhF);
+matrix Q = q(VhF, VhF);
+
+matrix RBC = rbc(VhF, VhF);
+
+//Coupling
+matrix C = c(VhF, VhF);
+
+//RHS
+real[int] RHStmp = rhs(0,VhF);
+matrix RHS = RHStmp;
+
+
+
+{
+ofstream fout(root+"M.txt");
+fout<< M <<endl;
+}
+{
+ofstream fout(root+"K.txt");
+fout<< K <<endl;
+}
+{
+ofstream fout(root+"H.txt");
+fout<< H <<endl;
+}
+{
+ofstream fout(root+"Q.txt");
+fout<< Q <<endl;
+}
+{
+ofstream fout(root+"RBC.txt");
+fout<< RBC <<endl;
+}
+{
+ofstream fout(root+"C.txt");
+fout<< C <<endl;
+}
+{
+ofstream fout(root+"RHS.txt");
+fout<< RHS <<endl;
+}
+
+
+
+saveRegionLabels(VhF, root+"regions.txt");
+saveBoundariesLabels(VhF, boundaryLabel, root+"labels.txt");
+saveNodes(VhF,root+"Nodes.txt");
+saveConnectivity(Th, VhF, root+"connectivity_table.txt");
+
